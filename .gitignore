@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Build output and coverage
+dist/
+coverage/
+*.log
+npm-debug.log*
+
+# Local editor/OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Local archives and backups
+backups/
+*.zip
+*.tar
+*.tar.gz
