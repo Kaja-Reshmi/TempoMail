@@ -22,25 +22,41 @@ const WORKER_HEARTBEAT_KEY = "tempomail:worker:heartbeat";
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
-  process.env.CLIENT_URL,
-].filter(Boolean);
+  "https://tempo-mail-dun.vercel.app",
+  ...(process.env.CLIENT_URL || "").split(","),
+  ...(process.env.CLIENT_URLS || "").split(","),
+]
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
 
 // Security middleware
 app.use(helmet());
 
 // CORS configuration
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without an Origin header (health checks, server requests)
+    if (!origin) {
+      return callback(null, true);
+    }
 
-      return callback(new Error("Origin not allowed by CORS"));
-    },
-    credentials: true,
-  })
-);
+    const normalizedOrigin = origin.replace(/\/$/, "");
+
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    console.error("CORS blocked origin:", origin);
+    return callback(new Error("Origin not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
+
+// Apply CORS before API routes so preflight requests are handled
+app.use(cors(corsOptions));
 
 // Request middleware
 app.use(express.json({ limit: "1mb" }));
@@ -62,17 +78,14 @@ app.get("/", (req, res) => {
 // Health check
 app.get("/api/health", async (req, res) => {
   try {
-    // Check PostgreSQL
     await pool.query("SELECT 1");
 
-    // Check Redis
     const redisStatus = await redisConnection.ping();
 
     if (redisStatus !== "PONG") {
       throw new Error("Redis connection failed");
     }
 
-    // Check worker heartbeat
     const heartbeat = await redisConnection.get(
       WORKER_HEARTBEAT_KEY
     );
@@ -82,21 +95,18 @@ app.get("/api/health", async (req, res) => {
     res.status(200).json({
       success: true,
       message: "TempoMail health check completed",
-
       services: {
         api: "running",
         database: "connected",
         redis: "connected",
         worker: workerOnline ? "online" : "offline",
       },
-
       worker: {
         status: workerOnline ? "online" : "offline",
         lastHeartbeat: heartbeat
           ? new Date(Number(heartbeat)).toISOString()
           : null,
       },
-
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -121,12 +131,16 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
   console.error("Server error:", error.message);
 
+  if (error.message === "Origin not allowed by CORS") {
+    return res.status(403).json({
+      success: false,
+      message: "Frontend origin is not allowed",
+    });
+  }
+
   res.status(error.status || 500).json({
     success: false,
-    message:
-      error.message === "Origin not allowed by CORS"
-        ? "Frontend origin is not allowed"
-        : "Internal server error",
+    message: "Internal server error",
   });
 });
 
@@ -146,10 +160,10 @@ async function startServer() {
 
     console.log("Redis connection verified");
 
+    console.log("Allowed frontend origins:", allowedOrigins);
+
     const server = app.listen(PORT, () => {
-      console.log(
-        `TempoMail API running at http://localhost:${PORT}`
-      );
+      console.log(`TempoMail API running on port ${PORT}`);
     });
 
     // Graceful shutdown
@@ -161,10 +175,7 @@ async function startServer() {
           await pool.end();
           await redisConnection.quit();
 
-          console.log(
-            "Database and Redis connections closed"
-          );
-
+          console.log("Database and Redis connections closed");
           process.exit(0);
         } catch (error) {
           console.error("Shutdown error:", error);
