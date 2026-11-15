@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "worker": "node src/worker.js",
-    "worker:dev": "nodemon src/worker.js"
+    "worker:dev": "nodemon src/worker.js",
+    "start:all": "node src/start-all.js"
   },
   "keywords": [
     "email",
