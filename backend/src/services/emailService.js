@@ -1,71 +1,69 @@
-
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: Number(process.env.EMAIL_PORT || 587),
-  secure: false,
-  requireTLS: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
-// Verify SMTP connection
+const transporter = !resend
+  ? nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: Number(process.env.EMAIL_PORT || 587),
+      secure: false,
+      requireTLS: true,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    })
+  : null;
+
 export async function verifyEmailConnection() {
-  try {
-    await transporter.verify();
-
-    console.log("Email SMTP connection verified successfully");
-
+  if (resend) {
+    console.log("Resend email service configured successfully");
     return true;
-  } catch (error) {
-    console.error("Email SMTP connection failed:", error.message);
-    throw error;
   }
+
+  await transporter.verify();
+  console.log("Email SMTP connection verified successfully");
+  return true;
 }
 
-// Send email with optional failure simulation for retry testing
-export async function sendEmail({
-  to,
-  subject,
-  text,
-  html,
-}) {
-  // TEMPORARY TEST:
-  // Only emails containing [RETRY-TEST] will fail.
+export async function sendEmail({ to, subject, text, html }) {
   if (
     process.env.SIMULATE_EMAIL_FAILURE === "true" &&
     subject.includes("[RETRY-TEST]")
   ) {
-    console.error("TEST MODE: Simulating email delivery failure");
-
-    throw new Error(
-      "TEST FAILURE: Simulated SMTP delivery error"
-    );
+    throw new Error("Simulated email failure for retry testing");
   }
 
-  try {
-    const result = await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to,
+  if (resend) {
+    const { data, error } = await resend.emails.send({
+      from: process.env.EMAIL_FROM || "TempoMail <onboarding@resend.dev>",
+      to: [to],
       subject,
       text,
       html,
     });
 
-    console.log("Email sent successfully:", result.messageId);
+    if (error) throw new Error(error.message);
 
-    return {
-      messageId: result.messageId,
-      previewUrl: nodemailer.getTestMessageUrl(result),
-    };
-  } catch (error) {
-    console.error("Email delivery failed:", error.message);
-    throw error;
+    return { messageId: data.id, previewUrl: null };
   }
+
+  const result = await transporter.sendMail({
+    from: process.env.EMAIL_FROM,
+    to,
+    subject,
+    text,
+    html,
+  });
+
+  return {
+    messageId: result.messageId,
+    previewUrl: nodemailer.getTestMessageUrl(result),
+  };
 }
