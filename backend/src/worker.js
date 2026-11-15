@@ -10,7 +10,6 @@ import { emailWorker } from "./workers/emailWorker.js";
 dotenv.config();
 
 const RECOVERY_INTERVAL = 30 * 1000;
-
 const WORKER_HEARTBEAT_KEY = "tempomail:worker:heartbeat";
 const HEARTBEAT_INTERVAL = 5 * 1000;
 const HEARTBEAT_TTL = 20;
@@ -19,7 +18,6 @@ let recoveryInterval = null;
 let heartbeatInterval = null;
 let shuttingDown = false;
 
-// Publish worker heartbeat to Redis
 async function publishWorkerHeartbeat() {
   try {
     await redisConnection.set(
@@ -33,15 +31,35 @@ async function publishWorkerHeartbeat() {
   }
 }
 
+// Queue recovery must not prevent the worker from starting.
+async function runQueueRecovery(source = "startup") {
+  try {
+    console.log(`Checking for missing scheduled emails (${source})...`);
+
+    const recoveryResult = await recoverScheduledEmails();
+
+    console.log(
+      `Queue recovery completed (${source}). Jobs restored: ${
+        recoveryResult.recovered
+      }`
+    );
+  } catch (error) {
+    console.error(
+      `Queue recovery failed (${source}):`,
+      error.message
+    );
+  }
+}
+
 async function startWorker() {
   try {
     console.log("Starting TempoMail background worker...");
 
-    // Verify PostgreSQL
+    // 1. Verify PostgreSQL
     await connectDatabase();
     console.log("Worker database connection verified");
 
-    // Verify Redis
+    // 2. Verify Redis
     const redisStatus = await redisConnection.ping();
 
     if (redisStatus !== "PONG") {
@@ -50,48 +68,31 @@ async function startWorker() {
 
     console.log("Worker Redis connection verified");
 
-    // Verify SMTP connection
+    // 3. Verify email delivery service
     await verifyEmailConnection();
-    console.log("SMTP connection verified");
+    console.log("Email delivery connection verified");
 
-    // Recover missing scheduled jobs
-    console.log("Checking for missing scheduled emails...");
-
-    const recoveryResult = await recoverScheduledEmails();
-
-    console.log(
-      `Startup recovery finished. Jobs restored: ${recoveryResult.recovered}`
-    );
-
-    // Repeat queue recovery every 30 seconds
-    recoveryInterval = setInterval(async () => {
-      try {
-        const result = await recoverScheduledEmails();
-
-        if (result.recovered > 0) {
-          console.log(
-            `Periodic recovery restored ${result.recovered} job(s)`
-          );
-        }
-      } catch (error) {
-        console.error(
-          "Periodic queue recovery failed:",
-          error.message
-        );
-      }
-    }, RECOVERY_INTERVAL);
-
-    console.log("Automatic queue recovery enabled (every 30 seconds)");
-
-    // Publish initial heartbeat
+    // 4. Publish heartbeat immediately after successful verification
     await publishWorkerHeartbeat();
 
-    // Refresh heartbeat every 5 seconds
     heartbeatInterval = setInterval(() => {
       publishWorkerHeartbeat();
     }, HEARTBEAT_INTERVAL);
 
     console.log("Worker heartbeat enabled (every 5 seconds)");
+
+    // 5. Start periodic queue recovery
+    recoveryInterval = setInterval(() => {
+      if (!shuttingDown) {
+        runQueueRecovery("periodic");
+      }
+    }, RECOVERY_INTERVAL);
+
+    console.log("Automatic queue recovery enabled (every 30 seconds)");
+
+    // 6. Run initial recovery without blocking worker availability
+    runQueueRecovery("startup");
+
     console.log("TempoMail background worker is ready!");
   } catch (error) {
     console.error("Worker startup failed:", error);
@@ -139,7 +140,6 @@ async function shutdown(signal) {
   try {
     await emailWorker.close();
 
-    // Remove heartbeat when worker shuts down normally
     await redisConnection.del(WORKER_HEARTBEAT_KEY);
 
     await pool.end();
