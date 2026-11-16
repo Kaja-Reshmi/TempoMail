@@ -2,7 +2,7 @@
 
 **Every email. Right on time.**
 
-TempoMail is a scheduled email automation application. Users can create an account, compose an email, schedule delivery, and monitor delivery status from a React dashboard.
+TempoMail is a scheduled email automation application. Users can create an account, compose an email, schedule delivery, and monitor delivery status from a React dashboard
 
 ## Features
 
